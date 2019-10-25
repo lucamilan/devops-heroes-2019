@@ -1,0 +1,8 @@
+variables:
+  subscription: 'AzureDOH2019'
+  resource_group_name: 'DOH2019'
+  resource_group_location: 'westeurope'
+  storage_account_name: 'doh2019'
+  azure_function_name: 'doh2019-ml'
+  BuildConfiguration: 'Release'
+

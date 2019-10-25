@@ -1,0 +1,18 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "name": {
+            "value": "doh2019-ml"
+        },
+        "storageName": {
+            "value": "doh2019"
+        },
+        "location": {
+            "value": "West Europe"
+        },
+        "subscriptionId": {
+            "value": "5c4d85fb-5646-4b37-b553-a7c664bd0b20"
+        }
+    }
+}

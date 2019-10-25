@@ -1,0 +1,24 @@
+parameters:
+  subscription: 'AzureDOH2019'   # Default when subscription is not specified.
+  resource_group_name: 'DOH2019' # Default when resource group name is not specified.
+  resource_group_location: 'West Europe'   # Default when resource group location is not specified.
+  storage_account_name: 'doh2019'
+
+steps:
+- task: AzureCLI@2
+  name: CreateStorageAccount
+  displayName: Create Storage Account
+  inputs:
+    azureSubscription: ${{ parameters.subscription }}
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: 'az storage account create --resource-group ${{ parameters.resource_group_name }} --name ${{ parameters.storage_account_name }} --kind StorageV2 --sku Standard_LRS'
+
+- task: AzureCLI@2
+  name: CreateBlobContainer
+  displayName: Create Blob Container for ML models
+  inputs:
+    azureSubscription: ${{ parameters.subscription }}
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: 'az storage container create --account-name doh2019 -n ml-models --public-access blob'

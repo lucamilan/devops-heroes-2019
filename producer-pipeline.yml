@@ -1,0 +1,126 @@
+name: $(BuildDefinitionName)_$(SourceBranchName)_$(Date:yyyyMMdd)$(rev:.r)
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+trigger:
+  batch: true
+  branches:
+    include:
+    - master
+    - experiment/*
+  paths:
+    exclude:
+      - consumer-pipeline.yml
+      - producer-pipeline.yml
+      - templates/*
+      - infrastructure/*
+
+pr: none
+
+variables:
+  template: templates/vars.yml
+
+stages:
+- stage: Infrastructure
+  displayName: 'Azure Resource Provisioning'
+  jobs:
+  - job: DeployResourceGroupAndStorageAccount
+    displayName: 'Creating Resource Group and Storage Account'
+    variables:
+    - template: templates/vars.yml
+    steps:
+    - template: templates/resource-group.yml
+      parameters:
+        subscription: ${{ variables.subscription }}
+        resource_group_name: ${{ variables.resource_group_name }}
+        resource_group_location: ${{ variables.resource_group_location }}
+
+    - template: templates/storage-account.yml
+      parameters:
+        subscription: ${{ variables.subscription }}
+        resource_group_name: ${{ variables.resource_group_name }}
+        resource_group_location: ${{ variables.resource_group_location }}
+        storage_account_name: ${{ variables.storage_account_name }}
+  
+- stage: BuildAndTest
+  displayName: 'Build solution and run tests'
+  jobs:
+  - job: BuildSolution
+    displayName: 'Restore packages, build projects, run tests'
+    steps:
+
+    - template: templates/install-dotnet.yml
+
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet restore $(BuildConfiguration)'
+      inputs:
+        command: 'restore'
+        projects: '**/mlnet.producer.sln'
+        feedsToUse: 'select'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet build $(BuildConfiguration)'
+      inputs:
+        command: 'build'
+        projects: '**/mlnet.producer.sln' 
+        arguments: '--configuration $(BuildConfiguration) --no-restore'
+        
+    - task: DotNetCoreCLI@2
+      displayName: 'dotnet test $(BuildConfiguration)'
+      inputs:
+        command: 'test'         
+        projects: '**/mlnet_trainer_tests.csproj'
+        arguments: '--configuration $(BuildConfiguration)'
+        testRunTitle: 'MLNet scenarios'
+        workingDirectory: '$(Build.SourcesDirectory)/src/mlnet_trainer_tests'
+  
+- stage: TrainModel
+  displayName: 'Train and Deploy Model'
+  dependsOn: 
+    - Infrastructure
+    - BuildAndTest 
+  jobs:
+  - job: TrainModel
+    displayName: 'Train ML Model'
+    steps:
+
+    - task: GitVersion@5
+      displayName: 'Calculate Git Version'
+      inputs:
+        preferBundledVersion: false
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Run Training Tool'
+      inputs:
+        command: 'run'
+        arguments: '--configuration $(BuildConfiguration) -- $(Build.ArtifactStagingDirectory)/$(GitVersion.NuGetVersionV2)-$(GitVersion.ShortSha).zip'
+        projects: '**/mlnet_trainer_tools/mlnet_trainer_tools.csproj'
+        workingDirectory: '$(Build.SourcesDirectory)/src/mlnet_trainer_tools'
+
+    - task: AzureCLI@2
+      displayName: 'Deploy ML Model to Azure Blob Storage'
+      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+      inputs:
+        azureSubscription: 'AzureDOH2019'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo GitVersion.ShortSha = $(GitVersion.ShortSha) GitVersion.NuGetVersionV2 = $(GitVersion.NuGetVersionV2)
+          az storage blob upload --account-name 'doh2019' -f "$(Build.ArtifactStagingDirectory)/$(GitVersion.NuGetVersionV2)-$(GitVersion.ShortSha).zip" -c 'ml-models' -n "$(GitVersion.NuGetVersionV2)-$(GitVersion.ShortSha).zip"
+
+    - task: GitHubRelease@0
+      displayName: 'Create Github Release'
+      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+      inputs:
+        gitHubConnection: lucamilan
+        repositoryName: '$(Build.Repository.Name)'
+        action: 'create'
+        tagSource: 'manual'
+        title: 'v$(GitVersion.NuGetVersionV2)-$(GitVersion.ShortSha)'
+        tag: '$(GitVersion.NuGetVersionV2)-$(GitVersion.ShortSha)'
+        isPreRelease: false
+        releaseNotesFile: "$(Build.ArtifactStagingDirectory)/CHANGELOG.txt"
+        assets: '$(Build.ArtifactStagingDirectory)/*.zip'
+        assetUploadMode: 'delete'
+        addChangeLog: true

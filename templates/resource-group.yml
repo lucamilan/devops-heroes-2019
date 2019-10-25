@@ -1,0 +1,12 @@
+parameters:
+  resource_group_name: 'DOH2019'
+  resource_group_location: 'westeurope'
+  subscription: 'AzureDOH2019'
+
+steps:
+- task: AzureCLI@2
+  displayName: 'Create Resource Group'
+  inputs:
+    azureSubscription: ${{ parameters.subscription }}
+    scriptLocation: 'inlineScript'
+    inlineScript: az group create -n ${{ parameters.resource_group_name }} -l ${{ parameters.resource_group_location }}

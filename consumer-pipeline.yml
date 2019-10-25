@@ -1,0 +1,104 @@
+name: $(BuildDefinitionName)_$(SourceBranchName)_$(Date:yyyyMMdd)$(rev:.r)
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+trigger: none
+
+variables:
+- template: templates/vars.yml
+
+stages:
+- stage: Infrastructure
+  displayName: 'Provision Azure Resources'
+  jobs:
+  - job: ProvisionResourceGroup
+    displayName: 'Provision Resource Group'
+    steps:
+    - template: templates/resource-group.yml
+      parameters:
+        subscription: ${{ variables.subscription }}
+        resource_group_name: ${{ variables.resource_group_name }}
+        resource_group_location: ${{ variables.resource_group_location }}
+
+  - job: ProvisionStorageAccount
+    displayName: 'Provision Storage Account'
+    dependsOn: ProvisionResourceGroup
+    steps:  
+    - template: templates/storage-account.yml
+      parameters:
+        subscription: ${{ variables.subscription }}
+        resource_group_name: ${{ variables.resource_group_name }}
+        resource_group_location: ${{ variables.resource_group_location }}
+    
+  - job: ProvisionFunction
+    displayName: 'Provision Azure Function'
+    dependsOn: 
+      - ProvisionStorageAccount
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: ${{ variables.subscription }}
+        scriptType: bash
+        scriptLocation: 'inlineScript'
+        inlineScript: az functionapp create --resource-group ${{ variables.resource_group_name }} --name doh2019-ml --storage-account ${{ variables.storage_account_name }} --os-type Windows --consumption-plan-location westeurope
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: ${{ variables.subscription }}
+        scriptType: bash
+        scriptLocation: 'inlineScript'
+        inlineScript: az functionapp config appsettings set --name doh2019-ml --resource-group ${{ variables.resource_group_name }} --settings WEBSITE_MAX_DYNAMIC_APPLICATION_SCALE_OUT=1
+
+- stage: Build
+  displayName: 'Build and publish Azure Function'
+  dependsOn: Infrastructure
+  jobs:
+  - job: BuildProject
+    displayName: 'Build project'
+    steps:
+    - template: templates/install-dotnet.yml
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Build project'
+      inputs:
+        command: 'build'
+        projects: 'src/mlnet_func/mlnet_func.csproj' 
+        arguments: '--configuration ${{ variables.BuildConfiguration }}'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish artifacts'
+      inputs:
+        command: 'publish'
+        projects: 'src/mlnet_func/mlnet_func.csproj' 
+        arguments: '--output $(Build.ArtifactStagingDirectory)'
+        publishWebProjects: false
+        modifyOutputPath: true
+        zipAfterPublish: true
+    - task: PublishPipelineArtifact@1
+      displayName: Publish artifact to deploy
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)'
+        artifact: 'func'
+
+- stage: Deploy
+  displayName: Function Deployment
+  condition: succeeded()
+  jobs:
+  - job: DeployFunction
+    displayName: Deploy Azure Function
+    steps:
+    - checkout: none
+    - task: DownloadPipelineArtifact@2
+      displayName: Download artifact to deploy
+      inputs:
+        buildType: 'current'
+        artifactName: func
+        targetPath: '$(Pipeline.Workspace)/func'
+    - task: AzureFunctionApp@1
+      displayName: 'Deploy Azure Function'
+      inputs:
+        azureSubscription: ${{ variables.subscription }}
+        appType: 'functionApp'
+        appName: ${{ variables.azure_function_name }}
+        package: '$(Pipeline.Workspace)/func/*.zip'
+        deploymentMethod: 'auto'
